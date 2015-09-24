@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+
+# $ echo file{1,2,3,4,5,6,7,8} | ./rxargs -n2 paste -d,
+# is same as:
+# $ paste -d, \
+#     <(paste -d, <(paste -d, file1 file2) <(paste -d, file3 file4)) \
+#     <(paste -d, <(paste -d, file5 file6) <(paste -d, file7 file8))
+#
+# $ echo file{1,2,3,4,5,6,7,8} | ./rxargs n3 paste -d,
+# is same as:
+# $  paste -d, \
+#     <(paste -d, file1 file2 file3) \
+#     <(paste -d, file4 file5 file6) \
+#     <(paste -d, file7 file8)
+#
+# $ for (( i = 1; i <= 8; ++i)); do echo $i > file$i; done
+# $ echo file{1,2,3,4,5,6,7,8} | ./rxargs paste -d,
+# will be
+# > 1,2,3,4,5,6,7,8
+
+
+Usage() {
+cat <<HERE
+Usage $0 [OPTIONS] COMMAND
+
+recursive xargs
+
+ -t [TEMPDIR]   Temporary working directory(default: create by mktemp)
+ -n [NUM]       max Number of arguments(default: auto by xargs)
+ -x             Execute COMMAND and print output file name
+
+HERE
+}
+
+declare num=100
+mode="xargs"
+while getopts ht:n:c:x OPT; do
+  case "$OPT" in
+    t)
+      temp_dir="${OPTARG}";
+      ;;
+    n)
+      num="${OPTARG}";
+      ;;
+    x)
+      mode="exec";
+      ;;
+    h)
+      Usage;
+      exit;
+      ;;
+    \?)
+      Usage;
+      exit 1;
+      ;;
+  esac
+done
+
+if [ -z "${temp_dir}" ]; then
+  temp_dir="$(mktemp -d)"
+  trap "rm -rf '${temp_dir}'" EXIT
+fi
+
+shift $((OPTIND -1 ))
+
+if [ "${mode}" == "xargs" ]; then
+  temp_file="$(mktemp "${temp_dir}/list.XXXXXXXX")"
+  xargs ${num+-n ${num}} -- $0 -x -t "${temp_dir}" ${num+-n ${num}} "${@}" > "${temp_file}"
+  nfiles=$(wc -l < "${temp_file}")
+  if [ "${nfiles}" -gt 1 ]; then
+    cat "${temp_file}" | $0 -t "${temp_dir}" "${num+-n ${num}}" "${@}"
+  else
+    cat "$(cat "${temp_file}")"
+  fi
+else
+  temp_file="$(mktemp "${temp_dir}/out.XXXXXXXX")"
+  "${@}" > ${temp_file}
+  echo "${temp_file}"
+fi

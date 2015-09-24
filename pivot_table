@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# vim: set ts=8:
+
+# $ ./pivot_table -r 1 -c 2 -v 3 -e XX -d, -i1 -o <<HERE
+# f1,f2,f3,f4
+# 1,1,v11,w11
+# 1,2,v12,w12
+# 1,3,v13,w13
+# 2,1,v21,w21
+# 2,3,v23,w23
+# HERE
+# > ,1,2,3
+# > 1,v11,v12,v13
+# > 2,v21,XX,v23
+
+printf -v delim "\t"
+printf -v delim2 "\v"
+printf -v empty ""
+output_header="no"
+declare -i input_header=0
+
+Usage() {
+cat <<HERE
+Usage $0 [OPTIONS] [FILES]
+
+ -e [EMPTY]     value for Empty cell(default: "")
+ -d [DELIM]     Delimiter(default: TAB)
+ -r [ROW]       Row filed index
+ -c [COL]       Col filed index
+ -v [VAL]       Val filed index
+ -i [IN_HEADER] # of Input header lines (default: 0)
+ -o             Output header
+
+HERE
+}
+
+while getopts he:d:r:c:v:i:o OPT; do
+  case "$OPT" in
+    e)
+      empty="${OPTARG}";
+      ;;
+    d)
+      delim="${OPTARG}";
+      ;;
+    r)
+      declare -i row_field="${OPTARG}";
+      ;;
+    c)
+      declare -i col_field="${OPTARG}";
+      ;;
+    v)
+      declare -i val_field="${OPTARG}";
+      ;;
+    i)
+      input_header="${OPTARG}";
+      ;;
+    o)
+      output_header="yes";
+      ;;
+    h)
+      Usage;
+      exit;
+      ;;
+    \?)
+      Usage;
+      exit 1;
+      ;;
+  esac
+done
+
+trap "Usage" EXIT
+: ${row_field?ROW is required}
+: ${col_field?COL is required}
+: ${val_field?VAL is required}
+trap - EXIT
+
+shift $((OPTIND -1 ))
+
+temp_dir="$(mktemp -d)"
+trap "rm -rf '${temp_dir}'" EXIT
+
+for (( i = 0; i < input_header; ++i)); do
+  read -d $'\n' line
+done
+
+cat "$@" \
+  | grep -v '^$' \
+  | sort -t "${delim}" -k "${col_field}" -k "${row_field}" \
+  | tee "${temp_dir}/sorted" \
+  | cut -d "${delim}" -f "${col_field}" \
+  | uniq > "${temp_dir}/cols"
+
+cut -d "${delim}" -f "${row_field}" "${temp_dir}/sorted" \
+  | sort -u > "${temp_dir}/rows"
+
+# pick up row, col and value only
+paste -d "${delim2}${delim}" \
+  <(cut -d "${delim}" -f "${col_field}" "${temp_dir}/sorted") \
+  <(cut -d "${delim}" -f "${row_field}" "${temp_dir}/sorted") \
+  <(cut -d "${delim}" -f "${val_field}" "${temp_dir}/sorted") > "${temp_dir}/values"
+
+# create full indexes
+while read -d $'\n' col; do
+  while read -d $'\n' row; do
+    printf "%s%s%s\n" "${col}" "${delim2}" "${row}"
+  done < "${temp_dir}/rows"
+done < "${temp_dir}/cols" > "${temp_dir}/indexes"
+
+# fill missing values, and split by col
+join -t "${delim}" "${temp_dir}/values" "${temp_dir}/indexes" -a2 -o "1.2" -e "${empty}" \
+  | split -l "$(wc -l < "${temp_dir}/rows")" - "${temp_dir}/col_"
+
+add_header() {
+  if [ "${output_header}" == "yes" ]; then
+    printf "%s" "${delim}"; paste -d "${delim}" -s "${temp_dir}/cols";
+    paste -d "${delim}" "${temp_dir}/rows" -;
+  else
+    cat
+  fi
+}
+
+# paste(merge horizontal) cols
+# NOTE: built-in echo(1) can handle arguments more than MAX_ARG
+echo "${temp_dir}/col_"* \
+  | ./rxargs -t "${temp_dir}" paste -d "${delim}" \
+  | add_header
